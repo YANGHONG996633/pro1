@@ -57,6 +57,14 @@ void Error_Handler(void);
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/
+#define ENA_Pin GPIO_PIN_1
+#define ENA_GPIO_Port GPIOA
+#define DIR_Pin GPIO_PIN_2
+#define DIR_GPIO_Port GPIOA
+#define Switch_Pin GPIO_PIN_6
+#define Switch_GPIO_Port GPIOA
+#define Cylinder_Pin GPIO_PIN_7
+#define Cylinder_GPIO_Port GPIOA
 
 /* USER CODE BEGIN Private defines */
 
