@@ -38,7 +38,8 @@
 #define FRAME_HEADER_1   0xAA
 #define FRAME_HEADER_2   0x55
 #define FRAME_CMD        0x10
-#define CYLINDER_HOLD_MS 2000
+#define CYLINDER_KICK_MS 1000   /* PA7 高电平持续时间 */
+#define UART_REPLY_TIMEOUT_MS 5000  /* 等待上位机回复超时 */
 #define DEBOUNCE_MS      20
 #define SWITCH_POLL_MS   10
 /* USER CODE END PD */
@@ -53,6 +54,7 @@
 static osSemaphoreId_t detectSemHandle;
 static osSemaphoreId_t uartSemHandle;
 static osSemaphoreId_t uartDoneSemHandle;
+static volatile uint8_t g_uartReply;   /* 上位机回复字节：0x01 或 0x02 */
 /* USER CODE END Variables */
 /* Definitions for defaultTask */
 osThreadId_t defaultTaskHandle;
@@ -169,7 +171,7 @@ static void vDetectTask(void *argument)
 }
 
 /**
- * @brief 控制任务：拉低 ENA 停机 → 触发气缸 500ms → 等串口发完 → 恢复 ENA
+ * @brief 控制任务：停带 → 发串口 → 等上位机回复 → 按回复动作 → 启带
  */
 static void vControlTask(void *argument)
 {
@@ -180,14 +182,18 @@ static void vControlTask(void *argument)
         /* 停止传送带 */
         HAL_GPIO_WritePin(ENA_GPIO_Port, ENA_Pin, GPIO_PIN_RESET);
 
-        /* 触发气缸 */
-        HAL_GPIO_WritePin(Cylinder_GPIO_Port, Cylinder_Pin, GPIO_PIN_SET);
-        osDelay(CYLINDER_HOLD_MS);
-        HAL_GPIO_WritePin(Cylinder_GPIO_Port, Cylinder_Pin, GPIO_PIN_RESET);
-
-        /* 通知串口任务发送帧，并等待发送完成 */
+        /* 通知串口任务发送帧，并等待上位机回复（串口任务会填充 g_uartReply） */
         osSemaphoreRelease(uartSemHandle);
         osSemaphoreAcquire(uartDoneSemHandle, osWaitForever);
+
+        if (g_uartReply == 0x01)
+        {
+            /* 上位机判定为缺陷：PA7 高电平 1s（剔除动作），再启带 */
+            HAL_GPIO_WritePin(Cylinder_GPIO_Port, Cylinder_Pin, GPIO_PIN_SET);
+            osDelay(CYLINDER_KICK_MS);
+            HAL_GPIO_WritePin(Cylinder_GPIO_Port, Cylinder_Pin, GPIO_PIN_RESET);
+        }
+        /* else 0x02 或超时：直接启带，不触发 PA7 */
 
         /* 恢复传送带 */
         HAL_GPIO_WritePin(ENA_GPIO_Port, ENA_Pin, GPIO_PIN_SET);
@@ -195,13 +201,14 @@ static void vControlTask(void *argument)
 }
 
 /**
- * @brief 串口任务：组帧并发送，格式：AA 55 10 [data] [XOR]
+ * @brief 串口任务：组帧发送，然后阻塞等待上位机回复1字节，填入 g_uartReply
  */
 static void vUartTask(void *argument)
 {
     static const uint8_t payload[] = {0x01, 0x00};  /* 固定占位数据 */
     uint8_t frame[6];
     uint8_t xor_val;
+    uint8_t reply;
     size_t i;
 
     for (;;)
@@ -225,7 +232,17 @@ static void vUartTask(void *argument)
 
         HAL_UART_Transmit(&huart1, frame, sizeof(frame), 100);
 
-        /* 通知控制任务：串口发送完毕 */
+        /* 等待上位机回复1字节，超时则默认 0x02（直接启带） */
+        if (HAL_UART_Receive(&huart1, &reply, 1, UART_REPLY_TIMEOUT_MS) == HAL_OK)
+        {
+            g_uartReply = reply;
+        }
+        else
+        {
+            g_uartReply = 0x02;  /* 超时：按无缺陷处理 */
+        }
+
+        /* 通知控制任务：回复已就绪 */
         osSemaphoreRelease(uartDoneSemHandle);
     }
 }

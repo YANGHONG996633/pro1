@@ -1,0 +1,639 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>FreeRTOS 信号量驱动演示</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #0d1117; color: #e6edf3; font-family: 'Consolas', monospace; min-height: 100vh; }
+
+  h1 { text-align: center; padding: 20px; font-size: 18px; color: #58a6ff; letter-spacing: 2px; }
+
+  /* 顶部信号量区域 */
+  #sem-area {
+    display: flex;
+    justify-content: center;
+    gap: 60px;
+    padding: 16px 0 8px;
+  }
+  .sem-box {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+  }
+  .sem-label { font-size: 11px; color: #8b949e; }
+  .sem-name { font-size: 13px; color: #ffa657; font-weight: bold; }
+  .sem-token {
+    width: 44px; height: 44px;
+    border-radius: 50%;
+    border: 2px solid #30363d;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 20px;
+    background: #161b22;
+    transition: all 0.3s ease;
+  }
+  .sem-token.has-token {
+    border-color: #3fb950;
+    background: #1a3a22;
+    box-shadow: 0 0 12px #3fb95066;
+  }
+  .sem-value { font-size: 18px; font-weight: bold; color: #3fb950; }
+  .sem-value.zero { color: #484f58; }
+
+  /* 三列任务区域 */
+  #tasks-area {
+    display: flex;
+    justify-content: center;
+    gap: 24px;
+    padding: 16px 24px;
+    align-items: flex-start;
+  }
+
+  .task-col {
+    width: 240px;
+    border: 1px solid #30363d;
+    border-radius: 10px;
+    overflow: hidden;
+    background: #161b22;
+  }
+  .task-header {
+    padding: 10px 14px;
+    font-size: 13px;
+    font-weight: bold;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    border-bottom: 1px solid #30363d;
+  }
+  .task-header.detect  { background: #1f2d3d; color: #79c0ff; }
+  .task-header.control { background: #2d1f3d; color: #d2a8ff; }
+  .task-header.uart    { background: #1f3d29; color: #7ee787; }
+
+  .task-state-badge {
+    margin-left: auto;
+    font-size: 10px;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-weight: normal;
+  }
+  .state-running  { background: #1f4a1f; color: #3fb950; border: 1px solid #3fb950; }
+  .state-blocked  { background: #3d1f1f; color: #f85149; border: 1px solid #f85149; }
+  .state-ready    { background: #3d3010; color: #ffa657; border: 1px solid #ffa657; }
+
+  .code-steps { padding: 8px 0; }
+  .step {
+    padding: 6px 14px;
+    font-size: 12px;
+    color: #484f58;
+    line-height: 1.6;
+    border-left: 3px solid transparent;
+    transition: all 0.2s;
+  }
+  .step.active {
+    color: #e6edf3;
+    border-left-color: #58a6ff;
+    background: #1c2128;
+  }
+  .step.done {
+    color: #3fb950;
+    border-left-color: #238636;
+  }
+  .step.blocked-step {
+    color: #f85149 !important;
+    border-left-color: #f85149 !important;
+    background: #1f0f0f !important;
+  }
+  .step .keyword { color: #ff7b72; }
+  .step .sem     { color: #ffa657; }
+  .step .comment { color: #6e7681; }
+  .step .gpio    { color: #79c0ff; }
+  .step .val01   { color: #3fb950; }
+  .step .val02   { color: #d2a8ff; }
+
+  /* 日志区域 */
+  #log-area {
+    margin: 0 24px 16px;
+    border: 1px solid #30363d;
+    border-radius: 8px;
+    background: #0d1117;
+    padding: 10px 14px;
+    height: 100px;
+    overflow-y: auto;
+    font-size: 12px;
+    line-height: 1.8;
+  }
+  .log-entry { color: #8b949e; }
+  .log-entry .ts { color: #484f58; }
+  .log-entry.detect-log  { color: #79c0ff; }
+  .log-entry.control-log { color: #d2a8ff; }
+  .log-entry.uart-log    { color: #7ee787; }
+  .log-entry.sem-log     { color: #ffa657; }
+  .log-entry.action-log  { color: #f0883e; }
+
+  /* 控制按钮 */
+  #ctrl-area {
+    display: flex;
+    justify-content: center;
+    gap: 12px;
+    padding: 0 0 20px;
+    flex-wrap: wrap;
+  }
+  button {
+    padding: 8px 20px;
+    border-radius: 6px;
+    border: 1px solid #30363d;
+    background: #21262d;
+    color: #e6edf3;
+    font-size: 13px;
+    cursor: pointer;
+    font-family: inherit;
+    transition: all 0.15s;
+  }
+  button:hover { background: #30363d; border-color: #8b949e; }
+  button.primary { background: #1f6feb; border-color: #1f6feb; }
+  button.primary:hover { background: #388bfd; }
+  button.danger { background: #da3633; border-color: #da3633; }
+  button.danger:hover { background: #f85149; }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  /* 上位机回复选择 */
+  #reply-selector {
+    display: flex;
+    justify-content: center;
+    gap: 16px;
+    padding: 4px 0 12px;
+    align-items: center;
+    font-size: 13px;
+    color: #8b949e;
+  }
+  .reply-btn {
+    padding: 6px 16px;
+    border-radius: 6px;
+    border: 1px solid #30363d;
+    background: #21262d;
+    color: #e6edf3;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 13px;
+    transition: all 0.15s;
+  }
+  .reply-btn.selected-01 { background: #1a3a22; border-color: #3fb950; color: #3fb950; }
+  .reply-btn.selected-02 { background: #2d1f3d; border-color: #d2a8ff; color: #d2a8ff; }
+  .reply-btn:hover { background: #30363d; }
+
+  /* 箭头动画 */
+  .arrow-overlay {
+    position: fixed;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    pointer-events: none;
+    z-index: 100;
+  }
+  .signal-dot {
+    position: absolute;
+    width: 10px; height: 10px;
+    border-radius: 50%;
+    background: #ffa657;
+    box-shadow: 0 0 8px #ffa657;
+    transform: translate(-50%, -50%);
+    transition: none;
+  }
+
+  /* 速度滑块 */
+  #speed-area {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 10px;
+    padding: 0 0 8px;
+    font-size: 12px;
+    color: #8b949e;
+  }
+  input[type=range] { width: 120px; accent-color: #58a6ff; }
+</style>
+</head>
+<body>
+
+<h1>FreeRTOS 信号量驱动演示 — 三任务协作</h1>
+
+<!-- 信号量显示 -->
+<div id="sem-area">
+  <div class="sem-box">
+    <span class="sem-name">detectSem</span>
+    <div class="sem-token" id="tok-detect">
+      <span class="sem-value zero" id="val-detect">0</span>
+    </div>
+    <span class="sem-label">检测→控制</span>
+  </div>
+  <div class="sem-box">
+    <span class="sem-name">uartSem</span>
+    <div class="sem-token" id="tok-uart">
+      <span class="sem-value zero" id="val-uart">0</span>
+    </div>
+    <span class="sem-label">控制→串口</span>
+  </div>
+  <div class="sem-box">
+    <span class="sem-name">uartDoneSem</span>
+    <div class="sem-token" id="tok-done">
+      <span class="sem-value zero" id="val-done">0</span>
+    </div>
+    <span class="sem-label">串口→控制</span>
+  </div>
+</div>
+
+<!-- 三列任务 -->
+<div id="tasks-area">
+
+  <!-- 检测任务 -->
+  <div class="task-col">
+    <div class="task-header detect">
+      <span>⚡ vDetectTask</span>
+      <span class="task-state-badge state-running" id="state-detect">Running</span>
+    </div>
+    <div class="code-steps" id="steps-detect">
+      <div class="step" id="d0"><span class="keyword">for</span>(;;) {</div>
+      <div class="step" id="d1">&nbsp;&nbsp;<span class="comment">// 轮询GPIO</span></div>
+      <div class="step" id="d2">&nbsp;&nbsp;<span class="keyword">if</span>(<span class="gpio">Switch == LOW</span>)</div>
+      <div class="step" id="d3">&nbsp;&nbsp;&nbsp;&nbsp;osDelay(<span class="val01">20ms</span>) <span class="comment">去抖</span></div>
+      <div class="step" id="d4">&nbsp;&nbsp;&nbsp;&nbsp;<span class="keyword">if</span>(再次确认触发)</div>
+      <div class="step" id="d5">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="sem">Release(detectSem)</span> ↑</div>
+      <div class="step" id="d6">&nbsp;&nbsp;&nbsp;&nbsp;<span class="comment">等物体离开...</span></div>
+      <div class="step" id="d7">&nbsp;&nbsp;osDelay(<span class="val01">10ms</span>)</div>
+      <div class="step" id="d8">} <span class="comment">// 回到循环顶</span></div>
+    </div>
+  </div>
+
+  <!-- 控制任务 -->
+  <div class="task-col">
+    <div class="task-header control">
+      <span>🎛 vControlTask</span>
+      <span class="task-state-badge state-blocked" id="state-control">Blocked</span>
+    </div>
+    <div class="code-steps" id="steps-control">
+      <div class="step" id="c0"><span class="keyword">for</span>(;;) {</div>
+      <div class="step blocked-step" id="c1">&nbsp;&nbsp;<span class="sem">Acquire(detectSem)</span> ⏳</div>
+      <div class="step" id="c2">&nbsp;&nbsp;<span class="gpio">ENA = LOW</span> <span class="comment">停带</span></div>
+      <div class="step" id="c3">&nbsp;&nbsp;<span class="sem">Release(uartSem)</span> ↑</div>
+      <div class="step" id="c4">&nbsp;&nbsp;<span class="sem">Acquire(uartDoneSem)</span> ⏳</div>
+      <div class="step" id="c5">&nbsp;&nbsp;<span class="keyword">if</span>(reply == <span class="val01">0x01</span>)</div>
+      <div class="step" id="c6">&nbsp;&nbsp;&nbsp;&nbsp;<span class="gpio">PA7=HIGH</span>→delay→<span class="gpio">PA7=LOW</span></div>
+      <div class="step" id="c7">&nbsp;&nbsp;<span class="gpio">ENA = HIGH</span> <span class="comment">启带</span></div>
+      <div class="step" id="c8">} <span class="comment">// 回到循环顶</span></div>
+    </div>
+  </div>
+
+  <!-- 串口任务 -->
+  <div class="task-col">
+    <div class="task-header uart">
+      <span>📡 vUartTask</span>
+      <span class="task-state-badge state-blocked" id="state-uart">Blocked</span>
+    </div>
+    <div class="code-steps" id="steps-uart">
+      <div class="step" id="u0"><span class="keyword">for</span>(;;) {</div>
+      <div class="step blocked-step" id="u1">&nbsp;&nbsp;<span class="sem">Acquire(uartSem)</span> ⏳</div>
+      <div class="step" id="u2">&nbsp;&nbsp;组帧 AA 55 10 ...</div>
+      <div class="step" id="u3">&nbsp;&nbsp;HAL_UART_Transmit()</div>
+      <div class="step" id="u4">&nbsp;&nbsp;HAL_UART_Receive() ⏳</div>
+      <div class="step" id="u5">&nbsp;&nbsp;g_uartReply = <span id="reply-show" class="val01">?</span></div>
+      <div class="step" id="u6">&nbsp;&nbsp;<span class="sem">Release(uartDoneSem)</span> ↑</div>
+      <div class="step" id="u7">} <span class="comment">// 回到循环顶</span></div>
+    </div>
+  </div>
+
+</div>
+
+<!-- 上位机回复选择 -->
+<div id="reply-selector">
+  <span>上位机回复：</span>
+  <button class="reply-btn selected-01" id="btn-01" onclick="setReply('0x01')">0x01 — 有缺陷（触发PA7）</button>
+  <button class="reply-btn" id="btn-02" onclick="setReply('0x02')">0x02 — 无缺陷（直接启带）</button>
+</div>
+
+<!-- 速度 -->
+<div id="speed-area">
+  <span>速度：</span>
+  <input type="range" id="speed" min="1" max="5" value="3">
+  <span id="speed-label">正常</span>
+</div>
+
+<!-- 控制按钮 -->
+<div id="ctrl-area">
+  <button class="primary" id="btn-trigger" onclick="triggerSwitch()">触发光电开关</button>
+  <button id="btn-step" onclick="nextStep()">单步执行</button>
+  <button id="btn-auto" onclick="toggleAuto()">▶ 自动演示</button>
+  <button class="danger" onclick="resetAll()">重置</button>
+</div>
+
+<!-- 日志 -->
+<div id="log-area"></div>
+
+<svg class="arrow-overlay" id="arrow-svg"></svg>
+
+<script>
+// ========== 状态 ==========
+const sems = { detect: 0, uart: 0, done: 0 };
+let reply = '0x01';
+let autoTimer = null;
+let stepQueue = [];
+let stepIndex = 0;
+let isRunning = false;
+let baseDelay = 600;
+
+// ========== 步骤定义 ==========
+// 每步格式: { task, stepId, semAction, semName, log, logClass, setState }
+function buildSteps(replyVal) {
+  return [
+    // --- 检测任务触发 ---
+    { task:'detect', active:['d2','d3','d4'], log:'[DetectTask] 光电开关触发，去抖确认', cls:'detect-log' },
+    { task:'detect', active:['d5'], semAction:'release', semName:'detect',
+      log:'[DetectTask] Release(detectSem) → 值: 0→1', cls:'sem-log',
+      arrowFrom:'state-detect', arrowTo:'state-control', arrowColor:'#79c0ff' },
+
+    // --- 控制任务唤醒 ---
+    { task:'control', active:['c1'], semAction:'acquire', semName:'detect',
+      log:'[ControlTask] Acquire(detectSem) ✓ 唤醒，值: 1→0', cls:'control-log',
+      setState:{ control:'Running' } },
+    { task:'control', active:['c2'], gpio:'ENA=LOW',
+      log:'[ControlTask] ENA=LOW，传送带停止', cls:'action-log' },
+    { task:'control', active:['c3'], semAction:'release', semName:'uart',
+      log:'[ControlTask] Release(uartSem) → 值: 0→1', cls:'sem-log',
+      arrowFrom:'state-control', arrowTo:'state-uart', arrowColor:'#d2a8ff' },
+    { task:'control', active:['c4'], semAction:'acquireBlock', semName:'done',
+      log:'[ControlTask] Acquire(uartDoneSem) ⏳ 阻塞等待...', cls:'control-log',
+      setState:{ control:'Blocked' } },
+
+    // --- 串口任务 ---
+    { task:'uart', active:['u1'], semAction:'acquire', semName:'uart',
+      log:'[UartTask] Acquire(uartSem) ✓ 唤醒，值: 1→0', cls:'uart-log',
+      setState:{ uart:'Running' } },
+    { task:'uart', active:['u2','u3'], log:'[UartTask] 组帧 AA 55 10 01 00 XOR，发送...', cls:'uart-log' },
+    { task:'uart', active:['u4'], log:'[UartTask] HAL_UART_Receive() 等待上位机回复...', cls:'uart-log' },
+    { task:'uart', active:['u5'],
+      log:`[UartTask] 收到回复 ${replyVal}，写入 g_uartReply`, cls:'sem-log',
+      replyShow: replyVal },
+    { task:'uart', active:['u6'], semAction:'release', semName:'done',
+      log:'[UartTask] Release(uartDoneSem) → 值: 0→1', cls:'sem-log',
+      arrowFrom:'state-uart', arrowTo:'state-control', arrowColor:'#7ee787' },
+    { task:'uart', active:['u7'], log:'[UartTask] 回到循环顶，再次 Acquire(uartSem)...', cls:'uart-log',
+      setState:{ uart:'Blocked' }, resetBlock:['u1'] },
+
+    // --- 控制任务收到通知 ---
+    { task:'control', active:['c4'], semAction:'acquire', semName:'done',
+      log:'[ControlTask] Acquire(uartDoneSem) ✓ 唤醒，值: 1→0', cls:'control-log',
+      setState:{ control:'Running' } },
+    ...(replyVal === '0x01' ? [
+      { task:'control', active:['c5','c6'],
+        log:'[ControlTask] reply=0x01 → PA7=HIGH，延时1s，PA7=LOW（剔除缺陷品）', cls:'action-log' },
+    ] : [
+      { task:'control', active:['c5'],
+        log:'[ControlTask] reply=0x02 → 跳过PA7操作', cls:'control-log' },
+    ]),
+    { task:'control', active:['c7'], gpio:'ENA=HIGH',
+      log:'[ControlTask] ENA=HIGH，传送带恢复', cls:'action-log' },
+    { task:'control', active:['c8'], log:'[ControlTask] 回到循环顶，再次 Acquire(detectSem)...', cls:'control-log',
+      setState:{ control:'Blocked', detect:'Running' }, resetBlock:['c1'] },
+  ];
+}
+
+// ========== 渲染 ==========
+function updateSem(name, val) {
+  sems[name] = val;
+  const map = { detect:'detect', uart:'uart', done:'done' };
+  const key = map[name];
+  const tok = document.getElementById('tok-' + key);
+  const valEl = document.getElementById('val-' + key);
+  valEl.textContent = val;
+  if (val > 0) {
+    tok.classList.add('has-token');
+    valEl.classList.remove('zero');
+  } else {
+    tok.classList.remove('has-token');
+    valEl.classList.add('zero');
+  }
+}
+
+function clearAllActive() {
+  document.querySelectorAll('.step').forEach(s => {
+    s.classList.remove('active');
+    if (!s.classList.contains('blocked-step-fixed')) {
+      // keep blocked style only if designated
+    }
+  });
+}
+
+function setStepActive(id) {
+  const el = document.getElementById(id);
+  if (el) { el.classList.add('active'); el.classList.remove('blocked-step'); }
+}
+
+function setStepBlocked(id) {
+  const el = document.getElementById(id);
+  if (el) { el.classList.add('blocked-step'); el.classList.remove('active'); }
+}
+
+function setTaskState(taskId, state) {
+  const el = document.getElementById('state-' + taskId);
+  el.className = 'task-state-badge state-' + state.toLowerCase();
+  el.textContent = state;
+}
+
+function log(msg, cls) {
+  const area = document.getElementById('log-area');
+  const div = document.createElement('div');
+  div.className = 'log-entry ' + (cls || '');
+  const t = new Date().toLocaleTimeString('zh-CN', {hour12:false, hour:'2-digit', minute:'2-digit', second:'2-digit'});
+  div.innerHTML = `<span class="ts">[${t}]</span> ${msg}`;
+  area.appendChild(div);
+  area.scrollTop = area.scrollHeight;
+}
+
+function getSpeed() {
+  const v = parseInt(document.getElementById('speed').value);
+  const map = { 1:1600, 2:1100, 3:600, 4:350, 5:180 };
+  return map[v] || 600;
+}
+
+// ========== 箭头动画 ==========
+function animateSignal(fromId, toId, color) {
+  const fromEl = document.getElementById(fromId);
+  const toEl = document.getElementById(toId);
+  if (!fromEl || !toEl) return;
+  const fr = fromEl.getBoundingClientRect();
+  const to = toEl.getBoundingClientRect();
+  const dot = document.createElement('div');
+  dot.className = 'signal-dot';
+  dot.style.background = color;
+  dot.style.boxShadow = `0 0 8px ${color}`;
+  dot.style.left = (fr.left + fr.width/2) + 'px';
+  dot.style.top = (fr.top + fr.height/2 + window.scrollY) + 'px';
+  document.body.appendChild(dot);
+  const duration = getSpeed();
+  const startX = fr.left + fr.width/2;
+  const startY = fr.top + fr.height/2;
+  const endX = to.left + to.width/2;
+  const endY = to.top + to.height/2;
+  const start = performance.now();
+  function animate(now) {
+    const t = Math.min((now - start) / duration, 1);
+    const ease = t < 0.5 ? 2*t*t : -1+(4-2*t)*t;
+    dot.style.left = (startX + (endX - startX) * ease) + 'px';
+    dot.style.top = (startY + (endY - startY) * ease + window.scrollY) + 'px';
+    if (t < 1) requestAnimationFrame(animate);
+    else dot.remove();
+  }
+  requestAnimationFrame(animate);
+}
+
+// ========== 执行步骤 ==========
+async function executeStep(step) {
+  // 先清除上一步高亮（保留 blocked 标记）
+  document.querySelectorAll('.step.active').forEach(s => s.classList.remove('active'));
+
+  // 设置当前行高亮
+  step.active.forEach(id => setStepActive(id));
+
+  // 状态变化
+  if (step.setState) {
+    Object.entries(step.setState).forEach(([t, s]) => setTaskState(t, s));
+  }
+
+  // 信号量操作
+  if (step.semAction === 'release') {
+    updateSem(step.semName, sems[step.semName] + 1);
+  } else if (step.semAction === 'acquire' || step.semAction === 'acquireBlock') {
+    updateSem(step.semName, Math.max(0, sems[step.semName] - 1));
+    if (step.semAction === 'acquireBlock') {
+      // 将等待行标记为 blocked
+      step.active.forEach(id => setStepBlocked(id));
+    }
+  }
+
+  // 恢复 blocked 行（循环顶的 Acquire 再次变为 blocked）
+  if (step.resetBlock) {
+    step.resetBlock.forEach(id => setStepBlocked(id));
+  }
+
+  // 回复显示
+  if (step.replyShow) {
+    const el = document.getElementById('reply-show');
+    el.textContent = step.replyShow;
+    el.className = step.replyShow === '0x01' ? 'val01' : 'val02';
+  }
+
+  // 箭头
+  if (step.arrowFrom) animateSignal(step.arrowFrom, step.arrowTo, step.arrowColor);
+
+  // 日志
+  if (step.log) log(step.log, step.cls);
+
+  await sleep(getSpeed());
+}
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+// ========== 主流程控制 ==========
+function triggerSwitch() {
+  if (isRunning) return;
+  stepQueue = buildSteps(reply);
+  stepIndex = 0;
+  document.getElementById('btn-step').disabled = false;
+  log('━━━ 光电开关触发，开始新一轮 ━━━', '');
+}
+
+async function nextStep() {
+  if (isRunning || stepIndex >= stepQueue.length) return;
+  isRunning = true;
+  document.getElementById('btn-step').disabled = true;
+  await executeStep(stepQueue[stepIndex]);
+  stepIndex++;
+  if (stepIndex < stepQueue.length) {
+    document.getElementById('btn-step').disabled = false;
+  } else {
+    log('━━━ 本轮完成，可再次触发 ━━━', '');
+  }
+  isRunning = false;
+}
+
+async function runAllSteps() {
+  for (; stepIndex < stepQueue.length; stepIndex++) {
+    if (!autoTimer) break; // 被停止
+    isRunning = true;
+    await executeStep(stepQueue[stepIndex]);
+    isRunning = false;
+  }
+  if (stepIndex >= stepQueue.length) {
+    log('━━━ 本轮完成 ━━━', '');
+    // 自动演示：等一下再触发下一轮
+    if (autoTimer) {
+      await sleep(getSpeed() * 2);
+      stepQueue = buildSteps(reply);
+      stepIndex = 0;
+      await runAllSteps();
+    }
+  }
+}
+
+function toggleAuto() {
+  const btn = document.getElementById('btn-auto');
+  if (autoTimer) {
+    autoTimer = null;
+    btn.textContent = '▶ 自动演示';
+    document.getElementById('btn-trigger').disabled = false;
+    document.getElementById('btn-step').disabled = false;
+  } else {
+    autoTimer = true;
+    btn.textContent = '⏹ 停止';
+    document.getElementById('btn-trigger').disabled = true;
+    document.getElementById('btn-step').disabled = true;
+    if (stepIndex >= stepQueue.length || stepQueue.length === 0) {
+      stepQueue = buildSteps(reply);
+      stepIndex = 0;
+    }
+    runAllSteps();
+  }
+}
+
+function resetAll() {
+  autoTimer = null;
+  isRunning = false;
+  stepQueue = [];
+  stepIndex = 0;
+  updateSem('detect', 0);
+  updateSem('uart', 0);
+  updateSem('done', 0);
+  document.querySelectorAll('.step').forEach(s => {
+    s.classList.remove('active', 'done', 'blocked-step');
+  });
+  // 恢复初始 blocked 状态
+  setStepBlocked('c1');
+  setStepBlocked('u1');
+  setTaskState('detect', 'Running');
+  setTaskState('control', 'Blocked');
+  setTaskState('uart', 'Blocked');
+  document.getElementById('btn-auto').textContent = '▶ 自动演示';
+  document.getElementById('btn-trigger').disabled = false;
+  document.getElementById('btn-step').disabled = false;
+  document.getElementById('reply-show').textContent = '?';
+  document.getElementById('reply-show').className = 'val01';
+  document.getElementById('log-area').innerHTML = '';
+  log('已重置，点击「触发光电开关」开始演示', '');
+}
+
+function setReply(val) {
+  reply = val;
+  document.getElementById('btn-01').className = 'reply-btn' + (val==='0x01' ? ' selected-01' : '');
+  document.getElementById('btn-02').className = 'reply-btn' + (val==='0x02' ? ' selected-02' : '');
+}
+
+// 速度标签
+document.getElementById('speed').addEventListener('input', function() {
+  const labels = { 1:'很慢', 2:'慢', 3:'正常', 4:'快', 5:'很快' };
+  document.getElementById('speed-label').textContent = labels[this.value];
+});
+
+// 初始化
+resetAll();
+</script>
+</body>
+</html>
