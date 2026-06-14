@@ -38,8 +38,14 @@
 #define FRAME_HEADER_1   0xAA
 #define FRAME_HEADER_2   0x55
 #define FRAME_CMD        0x10
+
+/* Jetson 回复帧协议: BB STATUS XOR (3字节) */
+#define REPLY_HEADER     0xBB
+#define REPLY_DEFECT     0x01   /* 有缺陷 → 剔除 */
+#define REPLY_NORMAL     0x02   /* 无缺陷 → 放行 */
+
 #define CYLINDER_KICK_MS 1000   /* PA7 高电平持续时间 */
-#define UART_REPLY_TIMEOUT_MS 5000  /* 等待上位机回复超时 */
+#define UART_REPLY_TIMEOUT_MS 30000 /* 等待 Jetson 回复超时 (30s, 给足推理时间) */
 #define DEBOUNCE_MS      20
 #define SWITCH_POLL_MS   10
 /* USER CODE END PD */
@@ -112,7 +118,7 @@ void MX_FREERTOS_Init(void) {
   /* add threads, ... */
   static const osThreadAttr_t detectTask_attr  = { .name = "DetectTask",  .stack_size = 128 * 4, .priority = osPriorityNormal };
   static const osThreadAttr_t controlTask_attr = { .name = "ControlTask", .stack_size = 128 * 4, .priority = osPriorityAboveNormal };
-  static const osThreadAttr_t uartTask_attr    = { .name = "UartTask",    .stack_size = 128 * 4, .priority = osPriorityNormal };
+  static const osThreadAttr_t uartTask_attr    = { .name = "UartTask",    .stack_size = 256 * 4, .priority = osPriorityNormal };
   osThreadNew(vDetectTask,  NULL, &detectTask_attr);
   osThreadNew(vControlTask, NULL, &controlTask_attr);
   osThreadNew(vUartTask,    NULL, &uartTask_attr);
@@ -186,14 +192,14 @@ static void vControlTask(void *argument)
         osSemaphoreRelease(uartSemHandle);
         osSemaphoreAcquire(uartDoneSemHandle, osWaitForever);
 
-        if (g_uartReply == 0x01)
+        if (g_uartReply == REPLY_DEFECT)
         {
             /* 上位机判定为缺陷：PA7 高电平 1s（剔除动作），再启带 */
             HAL_GPIO_WritePin(Cylinder_GPIO_Port, Cylinder_Pin, GPIO_PIN_SET);
             osDelay(CYLINDER_KICK_MS);
             HAL_GPIO_WritePin(Cylinder_GPIO_Port, Cylinder_Pin, GPIO_PIN_RESET);
         }
-        /* else 0x02 或超时：直接启带，不触发 PA7 */
+        /* else REPLY_NORMAL 或超时：直接启带，不触发 PA7 */
 
         /* 恢复传送带 */
         HAL_GPIO_WritePin(ENA_GPIO_Port, ENA_Pin, GPIO_PIN_SET);
@@ -201,14 +207,16 @@ static void vControlTask(void *argument)
 }
 
 /**
- * @brief 串口任务：组帧发送，然后阻塞等待上位机回复1字节，填入 g_uartReply
+ * @brief 串口任务：组帧发送，然后阻塞等待 Jetson 回复并解析
+ *        Jetson 回复帧格式: BB STATUS XOR (3字节)
+ *        STATUS=0x01 剔除 | 0x02 放行, XOR = BB ^ STATUS
  */
 static void vUartTask(void *argument)
 {
     static const uint8_t payload[] = {0x01, 0x00};  /* 固定占位数据 */
     uint8_t frame[6];
     uint8_t xor_val;
-    uint8_t reply;
+    uint8_t reply_buf[3];
     size_t i;
 
     for (;;)
@@ -232,14 +240,23 @@ static void vUartTask(void *argument)
 
         HAL_UART_Transmit(&huart1, frame, sizeof(frame), 100);
 
-        /* 等待上位机回复1字节，超时则默认 0x02（直接启带） */
-        if (HAL_UART_Receive(&huart1, &reply, 1, UART_REPLY_TIMEOUT_MS) == HAL_OK)
+        /* 等待 Jetson 回复3字节: BB STATUS XOR */
+        if (HAL_UART_Receive(&huart1, reply_buf, 3, UART_REPLY_TIMEOUT_MS) == HAL_OK)
         {
-            g_uartReply = reply;
+            /* 校验回复帧: 帧头=0xBB, XOR=BB^STATUS */
+            if (reply_buf[0] == REPLY_HEADER &&
+                reply_buf[2] == (reply_buf[0] ^ reply_buf[1]))
+            {
+                g_uartReply = reply_buf[1];
+            }
+            else
+            {
+                g_uartReply = REPLY_NORMAL;  /* 校验失败，按无缺陷处理 */
+            }
         }
         else
         {
-            g_uartReply = 0x02;  /* 超时：按无缺陷处理 */
+            g_uartReply = REPLY_NORMAL;  /* 超时：按无缺陷处理 */
         }
 
         /* 通知控制任务：回复已就绪 */
