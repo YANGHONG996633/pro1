@@ -133,7 +133,17 @@ Period    = 999 →  PWM 周期 = 1000 µs = 1 ms（1 kHz）
 Compare   = 500 →  占空比 50%
 ```
 
-调速只需修改 Compare 值（范围 0~999）：
+> **注意**：步进电机速度由 PWM **频率**决定，而非占空比！
+> 调速公式：速度 ∝ 频率 = 1 MHz ÷ (Period + 1)
+> Compare 只影响脉冲宽度，不影响转速。
+
+调速方法：
+- 降低速度 → 增大 `Period`（降低频率）
+- 提高速度 → 减小 `Period`（提高频率）
+- Compare 保持 500（50% 占空比）即可，TB6600 只需足够宽的脉冲
+
+示例（修改 `tim.c` 中的 `htim2.Init.Period`）：
 ```c
-__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, 500); // 50% 占空比
+htim2.Init.Period = 1999;  // 500 Hz → 半速
+htim2.Init.Period = 3999;  // 250 Hz → 1/4 速
 ```
